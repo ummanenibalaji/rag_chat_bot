@@ -1,0 +1,16 @@
+venv/
+__pycache__/
+*.pyc
+
+.env
+
+faiss_index/
+faiss_indexes/
+
+uploads/
+
+rag_app.db
+
+.streamlit/
+
+.DS_Store

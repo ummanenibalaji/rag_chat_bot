@@ -517,3 +517,109 @@ def validate_document(
             )
 
     return report
+
+
+# =====================================================
+# ARRAY DIMENSION EXTRACTION
+# =====================================================
+
+_DIM_RE = re.compile(r"\d+'-\d+(?:\s+\d+/\d+)?\"")
+
+
+def _to_inches(s):
+    m = re.match(r"(\d+)'-(\d+)", s)
+    return int(m.group(1)) * 12 + int(m.group(2)) if m else 0
+
+
+def extract_array_dimensions(pdf_path: str) -> dict:
+    """
+    Extract overall array width and height dimensions from each page of a
+    CAD drawing PDF.
+
+    Strategy:
+      - PDF embedded text is extracted with bounding-box coordinates.
+      - Repeating dimension strings = individual panel dims (inside array).
+      - Overall width  = dimension whose centre-y sits ABOVE the panel cluster.
+      - Overall height = dimension whose centre-x sits RIGHT OF the panel cluster.
+      - For pages where text extraction finds no outside-cluster dim, falls back
+        to the unique dim closest to the array edge.
+
+    Returns:
+        {
+          1: {"width": "114'-2\"",  "height": "31'-6\"",  "source": "text"},
+          2: {"width": None,        "height": None,        "source": "not_found"},
+          ...
+        }
+    """
+    doc = fitz.open(pdf_path)
+    results = {}
+
+    for pg in range(len(doc)):
+        page = doc[pg]
+        all_dims = []
+
+        for b in page.get_text("dict")["blocks"]:
+            if b["type"] != 0:
+                continue
+            for line in b["lines"]:
+                for span in line["spans"]:
+                    for m in _DIM_RE.finditer(span["text"]):
+                        x0, y0, x1, y1 = span["bbox"]
+                        all_dims.append({
+                            "val": m.group(),
+                            "cx":  (x0 + x1) / 2,
+                            "cy":  (y0 + y1) / 2,
+                        })
+
+        if not all_dims:
+            results[pg + 1] = {"width": None, "height": None, "source": "not_found"}
+            continue
+
+        from collections import Counter
+        counts = Counter(d["val"] for d in all_dims)
+
+        # Repeating dims form the panel cluster
+        repeating = [d for d in all_dims if counts[d["val"]] > 1]
+        cluster_min_cy = min(d["cy"] for d in repeating) if repeating else float("inf")
+        cluster_max_cx = max(d["cx"] for d in repeating) if repeating else 0.0
+
+        # 60pt gap threshold — overall dims sit clearly outside panel cluster
+        GAP = 60
+
+        width_candidates  = [d for d in all_dims if d["cy"] < cluster_min_cy - GAP]
+        height_candidates = [d for d in all_dims if d["cx"] > cluster_max_cx + GAP]
+
+        def pick_best(candidates):
+            if not candidates:
+                return None
+            unique = [d for d in candidates if counts[d["val"]] == 1]
+            pool = unique if unique else candidates
+            return max(pool, key=lambda d: _to_inches(d["val"]))["val"]
+
+        width_val  = pick_best(width_candidates)
+        height_val = pick_best(height_candidates)
+
+        # Fallback: unique dims at spatial extremes (for pages where overall dim
+        # sits at same y-level as array boundary rather than above it)
+        if width_val is None:
+            unique_dims = [d for d in all_dims if counts[d["val"]] == 1]
+            if unique_dims:
+                topmost_unique = min(unique_dims, key=lambda d: d["cy"])
+                # Accept only if it is the topmost dim on the page overall
+                if topmost_unique["cy"] == min(d["cy"] for d in all_dims):
+                    width_val = topmost_unique["val"]
+
+        if height_val is None:
+            unique_dims = [d for d in all_dims if counts[d["val"]] == 1]
+            if unique_dims:
+                rightmost_unique = max(unique_dims, key=lambda d: d["cx"])
+                if rightmost_unique["cx"] == max(d["cx"] for d in all_dims):
+                    height_val = rightmost_unique["val"]
+
+        results[pg + 1] = {
+            "width":  width_val,
+            "height": height_val,
+            "source": "text" if (width_val or height_val) else "not_found",
+        }
+
+    return results

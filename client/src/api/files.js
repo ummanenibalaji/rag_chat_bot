@@ -14,3 +14,6 @@ export const uploadFile = (file) => {
 
 export const deleteFile = (filename) =>
   api.delete('/delete-file', { params: { filename } })
+
+export const getArrayDimensions = (filename) =>
+  api.get('/array-dimensions', { params: { filename } })

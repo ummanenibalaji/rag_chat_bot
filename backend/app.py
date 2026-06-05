@@ -51,6 +51,10 @@ from auth import (
     create_reset_token
 )
 
+from cad_checker import (
+    extract_array_dimensions
+)
+
 
 # =====================================================
 # FASTAPI APP
@@ -907,3 +911,37 @@ async def get_documents():
     db.close()
 
     return [{"filename": f} for f in files]
+
+
+# =====================================================
+# ARRAY DIMENSIONS
+# =====================================================
+
+@app.get("/array-dimensions")
+async def get_array_dimensions(
+    filename: str,
+    token: str = Header(None)
+):
+    user_id = decode_access_token(token)
+
+    if not user_id:
+        return {"error": "Unauthorized"}
+
+    file_path = os.path.join(
+        "uploads",
+        f"user_{user_id}",
+        filename
+    )
+
+    if not os.path.exists(file_path):
+        return {"error": "File not found"}
+
+    if not filename.lower().endswith(".pdf"):
+        return {"error": "Only PDF files supported"}
+
+    dims = extract_array_dimensions(file_path)
+
+    return {
+        "filename": filename,
+        "pages": dims
+    }

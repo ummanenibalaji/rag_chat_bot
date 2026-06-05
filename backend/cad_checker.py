@@ -523,7 +523,8 @@ def validate_document(
 # ARRAY DIMENSION EXTRACTION
 # =====================================================
 
-_DIM_RE = re.compile(r"\d+'-\d+(?:\s+\d+/\d+)?\"")
+_FULL_DIM_RE = re.compile(r"\d+'-\d+(?:\s+\d+/\d+)?\"")
+_BASE_DIM_RE = re.compile(r"^\d+'-\d+$")
 
 
 def _to_inches(s):
@@ -531,18 +532,80 @@ def _to_inches(s):
     return int(m.group(1)) * 12 + int(m.group(2)) if m else 0
 
 
+def _collect_all_dims(page):
+    """
+    Two-pass dim collection:
+    Pass 1 — complete dims already in a single span (e.g. "6'-10 1/2\"").
+    Pass 2 — split-span dims where the fraction is rendered as stacked
+              superscript/subscript glyphs in separate spans:
+              "121'-8" span + "1" (up) + "2" (down) + '"' span → "121'-8 1/2\""
+    """
+    all_spans = []
+    for b in page.get_text("dict")["blocks"]:
+        if b["type"] != 0:
+            continue
+        for line in b["lines"]:
+            for span in line["spans"]:
+                t = span["text"].strip()
+                if not t:
+                    continue
+                x0, y0, x1, y1 = span["bbox"]
+                all_spans.append({
+                    "text": t,
+                    "cx": (x0 + x1) / 2,
+                    "cy": (y0 + y1) / 2,
+                })
+
+    dims = []
+
+    # Pass 1: complete dims already in one span
+    for s in all_spans:
+        for m in _FULL_DIM_RE.finditer(s["text"]):
+            dims.append({"val": m.group(), "cx": s["cx"], "cy": s["cy"]})
+
+    # Pass 2: reconstruct split dims
+    for s in all_spans:
+        if not _BASE_DIM_RE.fullmatch(s["text"]):
+            continue
+        base_cx, base_cy = s["cx"], s["cy"]
+
+        # Closing " span within 250px right, ±25px vertical
+        inch_spans = [
+            sp for sp in all_spans
+            if sp["text"] == '"'
+            and 10 < sp["cx"] - base_cx < 250
+            and abs(sp["cy"] - base_cy) < 25
+        ]
+        if not inch_spans:
+            continue
+        inch = min(inch_spans, key=lambda sp: sp["cx"] - base_cx)
+
+        # Single-digit spans between base and " (stacked fraction glyphs)
+        frac = [
+            sp for sp in all_spans
+            if sp["text"].isdigit()
+            and base_cx < sp["cx"] < inch["cx"]
+            and abs(sp["cy"] - base_cy) < 35
+        ]
+
+        if len(frac) == 2:
+            num, den = sorted(frac, key=lambda sp: sp["cy"])
+            val = f"{s['text']} {num['text']}/{den['text']}\""
+        else:
+            val = f"{s['text']}\""
+
+        dims.append({"val": val, "cx": base_cx, "cy": base_cy})
+
+    return dims
+
+
 def extract_array_dimensions(pdf_path: str) -> dict:
     """
-    Extract overall array width and height dimensions from each page of a
-    CAD drawing PDF.
+    Extract overall array width and height per page from a CAD PDF.
 
-    Strategy:
-      - PDF embedded text is extracted with bounding-box coordinates.
-      - Repeating dimension strings = individual panel dims (inside array).
-      - Overall width  = dimension whose centre-y sits ABOVE the panel cluster.
-      - Overall height = dimension whose centre-x sits RIGHT OF the panel cluster.
-      - For pages where text extraction finds no outside-cluster dim, falls back
-        to the unique dim closest to the array edge.
+    Uses embedded text + bounding-box coordinates (no OCR needed).
+    Repeating dims = panel dims (cluster). Overall dims sit spatially
+    outside the cluster: above → width, right of → height.
 
     Returns:
         {
@@ -551,70 +614,39 @@ def extract_array_dimensions(pdf_path: str) -> dict:
           ...
         }
     """
+    from collections import Counter
+
     doc = fitz.open(pdf_path)
     results = {}
 
     for pg in range(len(doc)):
         page = doc[pg]
-        all_dims = []
-
-        for b in page.get_text("dict")["blocks"]:
-            if b["type"] != 0:
-                continue
-            for line in b["lines"]:
-                for span in line["spans"]:
-                    for m in _DIM_RE.finditer(span["text"]):
-                        x0, y0, x1, y1 = span["bbox"]
-                        all_dims.append({
-                            "val": m.group(),
-                            "cx":  (x0 + x1) / 2,
-                            "cy":  (y0 + y1) / 2,
-                        })
+        all_dims = _collect_all_dims(page)
 
         if not all_dims:
             results[pg + 1] = {"width": None, "height": None, "source": "not_found"}
             continue
 
-        from collections import Counter
         counts = Counter(d["val"] for d in all_dims)
 
-        # Repeating dims form the panel cluster
+        # Panel cluster = repeating dims
         repeating = [d for d in all_dims if counts[d["val"]] > 1]
         cluster_min_cy = min(d["cy"] for d in repeating) if repeating else float("inf")
         cluster_max_cx = max(d["cx"] for d in repeating) if repeating else 0.0
 
-        # 60pt gap threshold — overall dims sit clearly outside panel cluster
         GAP = 60
+        width_cands  = [d for d in all_dims if d["cy"] < cluster_min_cy - GAP]
+        height_cands = [d for d in all_dims if d["cx"] > cluster_max_cx + GAP]
 
-        width_candidates  = [d for d in all_dims if d["cy"] < cluster_min_cy - GAP]
-        height_candidates = [d for d in all_dims if d["cx"] > cluster_max_cx + GAP]
-
-        def pick_best(candidates):
-            if not candidates:
+        def pick_best(cands):
+            if not cands:
                 return None
-            unique = [d for d in candidates if counts[d["val"]] == 1]
-            pool = unique if unique else candidates
+            unique = [d for d in cands if counts[d["val"]] == 1]
+            pool = unique if unique else cands
             return max(pool, key=lambda d: _to_inches(d["val"]))["val"]
 
-        width_val  = pick_best(width_candidates)
-        height_val = pick_best(height_candidates)
-
-        # Fallback: unique dims at spatial extremes (for pages where overall dim
-        # sits at same y-level as array boundary rather than above it)
-        if width_val is None:
-            unique_dims = [d for d in all_dims if counts[d["val"]] == 1]
-            if unique_dims:
-                topmost_unique = min(unique_dims, key=lambda d: d["cy"])
-                # Accept only if it is the topmost dim on the page overall
-                if topmost_unique["cy"] == min(d["cy"] for d in all_dims):
-                    width_val = topmost_unique["val"]
-
-        if height_val is None:
-            unique_dims = [d for d in all_dims if counts[d["val"]] == 1]
-            if unique_dims:
-                rightmost_unique = max(unique_dims, key=lambda d: d["cx"])
-                if rightmost_unique["cx"] == max(d["cx"] for d in all_dims):
-                    height_val = rightmost_unique["val"]
+        width_val  = pick_best(width_cands)
+        height_val = pick_best(height_cands)
 
         results[pg + 1] = {
             "width":  width_val,

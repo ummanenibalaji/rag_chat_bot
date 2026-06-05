@@ -525,11 +525,17 @@ def validate_document(
 
 _FULL_DIM_RE = re.compile(r"\d+'-\d+(?:\s+\d+/\d+)?\"")
 _BASE_DIM_RE = re.compile(r"^\d+'-\d+$")
+_FTONLY_RE   = re.compile(r"^\d{2,}'$")   # e.g. "133'" — feet only, no inch part
 
 
 def _to_inches(s):
     m = re.match(r"(\d+)'-(\d+)", s)
-    return int(m.group(1)) * 12 + int(m.group(2)) if m else 0
+    if m:
+        return int(m.group(1)) * 12 + int(m.group(2))
+    m2 = re.match(r"(\d+)'$", s)
+    if m2:
+        return int(m2.group(1)) * 12
+    return 0
 
 
 def _collect_all_dims(page):
@@ -595,6 +601,11 @@ def _collect_all_dims(page):
             val = f"{s['text']}\""
 
         dims.append({"val": val, "cx": base_cx, "cy": base_cy})
+
+    # Pass 3: feet-only dims like "133'" (no inch component)
+    for s in all_spans:
+        if _FTONLY_RE.fullmatch(s["text"]):
+            dims.append({"val": s["text"], "cx": s["cx"], "cy": s["cy"]})
 
     return dims
 

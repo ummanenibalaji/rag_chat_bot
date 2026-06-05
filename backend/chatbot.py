@@ -440,15 +440,52 @@ def detect_tool(
     # -------------------------------------------------
 
     vision_keywords = [
+
+        # Generic
         "image",
         "photo",
-        "screenshot",
         "picture",
-        "diagram",
+        "screenshot",
+
+        # Analysis
+        "analyze image",
+        "what does this image contain",
+        "describe image",
+
+        # Tables
+        "table",
+        "extract table",
+        "extract rows",
+        "extract columns",
+
+        # Charts
         "chart",
         "graph",
-        "analyze image",
-        "what does this image contain"
+        "plot",
+
+        # Documents
+        "invoice",
+        "bill",
+        "receipt",
+
+        "resume",
+        "cv",
+
+        "contract",
+        "agreement",
+
+        # Debugging
+        "error",
+        "debug",
+        "exception",
+
+        # Dashboards
+        "dashboard",
+        "analytics",
+
+        # OCR
+        "read text",
+        "extract text"
     ]
 
     # -------------------------------------------------
@@ -460,6 +497,16 @@ def detect_tool(
         if keyword in query_lower:
 
             return "cad_review"
+
+    file_keywords = [
+        "list documents",
+        "list files",
+        "uploaded files",
+        "uploaded documents",
+        "show files",
+        "show documents",
+        "what files are uploaded"
+    ]
 
     # -------------------------------------------------
     # CALCULATOR DETECTION
@@ -490,6 +537,12 @@ def detect_tool(
         if keyword in query_lower:
 
             return "vision"
+        
+    for keyword in file_keywords:
+
+        if keyword in query_lower:
+
+            return "file_list"
 
     return None
 
@@ -683,6 +736,42 @@ def filter_docs_by_filename(
     return filtered_docs
 
 
+def detect_image_file(
+    query,
+    user_id
+):
+
+    upload_folder = (
+        f"uploads/user_{user_id}"
+    )
+
+    if not os.path.exists(
+        upload_folder
+    ):
+
+        return None
+
+    query_lower = query.lower()
+
+    for file in os.listdir(
+        upload_folder
+    ):
+
+        if not file.lower().endswith(
+            (".png", ".jpg", ".jpeg")
+        ):
+            continue
+
+        filename = os.path.splitext(
+            file
+        )[0].lower()
+
+        if filename in query_lower:
+
+            return file
+
+    return None
+
 # =====================================================
 # ASK QUESTION
 # =====================================================
@@ -706,6 +795,40 @@ def ask_question(
         "DETECTED TOOL:",
         tool
     )
+
+    if tool == "file_list":
+
+        upload_folder = (
+            f"uploads/user_{user_id}"
+        )
+
+        if not os.path.exists(
+            upload_folder
+        ):
+
+            return {
+                "prompt": (
+                    "No documents uploaded."
+                ),
+                "sources": []
+            }
+
+        files = os.listdir(
+            upload_folder
+        )
+
+        return {
+            "prompt": (
+                "Uploaded Documents:\n\n"
+                + "\n".join(
+                    [f"• {f}" for f in files]
+                )
+            ),
+            "sources": [],
+            "tool_used": "file_list"
+        }
+
+
     json_mode = wants_json_output(
         query
     )   
@@ -981,7 +1104,18 @@ Answer:
                 "sources": []
             }
 
-        latest_image = image_files[-1]
+        detected_image = detect_image_file(
+            query,
+            user_id
+        )
+
+        if detected_image:
+
+            latest_image = detected_image
+
+        else:
+
+            latest_image = image_files[-1]
 
         image_path = os.path.join(
             upload_folder,

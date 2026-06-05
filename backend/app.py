@@ -359,20 +359,24 @@ def validate_token(
 
 @app.post("/upload")
 async def upload_document(
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    token: str = Header(...)
 ):
 
     db = SessionLocal()
 
-    # Temporary development user
-    user = db.query(User).first()
+    email = decode_access_token(token)
+
+    user = db.query(User).filter(
+        User.email == email
+    ).first()
 
     if not user:
 
         db.close()
 
         return {
-            "message": "No users found. Please create one account first."
+            "message": "Unauthorized or user not found."
         }
 
     # -------------------------------------------------
@@ -530,18 +534,22 @@ def get_uploaded_files(
 
 @app.post("/ask")
 async def ask(
-    data: dict = Body(...)
+    data: dict = Body(...),
+    token: str = Header(...)
 ):
 
     db = SessionLocal()
 
-    # Development mode
-    user = db.query(User).first()
+    email = decode_access_token(token)
+
+    user = db.query(User).filter(
+        User.email == email
+    ).first()
 
     if not user:
         db.close()
         return {
-            "message": "No user found"
+            "message": "Unauthorized or user not found."
         }
 
     query = data.get("query")
@@ -877,11 +885,17 @@ def get_messages(
     return result
 
 @app.get("/documents")
-async def get_documents():
+async def get_documents(
+    token: str = Header(...)
+):
 
     db = SessionLocal()
 
-    user = db.query(User).first()
+    email = decode_access_token(token)
+
+    user = db.query(User).filter(
+        User.email == email
+    ).first()
 
     if not user:
         db.close()

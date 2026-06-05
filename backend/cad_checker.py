@@ -646,8 +646,22 @@ def extract_array_dimensions(pdf_path: str) -> dict:
         cluster_max_cx = max(d["cx"] for d in repeating) if repeating else 0.0
 
         GAP = 60
-        width_cands  = [d for d in all_dims if d["cy"] < cluster_min_cy - GAP]
-        height_cands = [d for d in all_dims if d["cx"] > cluster_max_cx + GAP]
+        cluster_max_cy = max(d["cy"] for d in repeating) if repeating else 0.0
+        cluster_min_cx = min(d["cx"] for d in repeating) if repeating else float("inf")
+
+        # Width = dim above OR below the cluster (horizontal spanning arrow)
+        width_cands = [
+            d for d in all_dims
+            if d["cy"] < cluster_min_cy - GAP      # above
+            or d["cy"] > cluster_max_cy + GAP      # below
+        ]
+
+        # Height = dim right OR left of the cluster (vertical spanning arrow)
+        height_cands = [
+            d for d in all_dims
+            if d["cx"] > cluster_max_cx + GAP      # right
+            or d["cx"] < cluster_min_cx - GAP      # left
+        ]
 
         def pick_best(cands):
             if not cands:

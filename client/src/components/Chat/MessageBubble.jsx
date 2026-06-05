@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 
@@ -49,7 +50,30 @@ export default function MessageBubble({ role, content, isStreaming = false }) {
         ) : (
           <div className="text-sm leading-relaxed prose-ai">
             <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
               components={{
+                table: ({ children }) => (
+                  <div className="overflow-x-auto my-3">
+                    <table className="w-full text-sm border-collapse" style={{ borderColor: 'rgba(255,255,255,0.1)' }}>
+                      {children}
+                    </table>
+                  </div>
+                ),
+                thead: ({ children }) => (
+                  <thead style={{ background: 'rgba(99,102,241,0.15)' }}>{children}</thead>
+                ),
+                tbody: ({ children }) => <tbody>{children}</tbody>,
+                tr: ({ children }) => (
+                  <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>{children}</tr>
+                ),
+                th: ({ children }) => (
+                  <th className="px-3 py-2 text-left font-semibold" style={{ color: '#A5B4FC', borderBottom: '1px solid rgba(99,102,241,0.3)' }}>
+                    {children}
+                  </th>
+                ),
+                td: ({ children }) => (
+                  <td className="px-3 py-2" style={{ color: '#CBD5E1' }}>{children}</td>
+                ),
                 code({ node, inline, className, children, ...props }) {
                   const match = /language-(\w+)/.exec(className || '')
                   return !inline && match ? (

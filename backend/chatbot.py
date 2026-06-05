@@ -36,6 +36,10 @@ from tools import (
     cad_review_tool
 )
 
+from cad_checker import (
+    extract_array_dimensions
+)
+
 
 # =====================================================
 # CAD MARKER SAFETY LAYER
@@ -385,6 +389,48 @@ def detect_tool(
     # -------------------------------------------------
     # CAD REVIEW
     # -------------------------------------------------
+
+    # -------------------------------------------------
+    # ARRAY DIMENSIONS
+    # -------------------------------------------------
+
+    array_dim_keywords = [
+        "array dimension",
+        "array dimensions",
+        "dimensions of array",
+        "dimensions of the array",
+        "dimensions of arrays",
+        "dimensions of the arrays",
+        "dimensions of all arrays",
+        "array size",
+        "array sizes",
+        "array width",
+        "array height",
+        "width and height",
+        "width of array",
+        "height of array",
+        "width of the array",
+        "height of the array",
+        "find dimensions",
+        "get dimensions",
+        "extract dimensions",
+        "give dimensions",
+        "show dimensions",
+        "dimensions from all pages",
+        "dimensions per page",
+        "dimensions of all",
+        "array measurements",
+        "overall dimensions",
+        "overall size",
+        "give me the dimensions",
+        "what are the dimensions",
+        "dimensions of drawing",
+        "dimensions of the drawing",
+    ]
+
+    for keyword in array_dim_keywords:
+        if keyword in query_lower:
+            return "array_dimensions"
 
     cad_keywords = [
         "cad",
@@ -828,12 +874,59 @@ def ask_question(
             "tool_used": "file_list"
         }
 
+    if tool == "array_dimensions":
+
+        upload_folder = f"uploads/user_{user_id}"
+
+        os.makedirs(upload_folder, exist_ok=True)
+
+        # Pick selected file or most recent PDF
+        if selected_file and selected_file.lower().endswith(".pdf"):
+            pdf_path = os.path.join(upload_folder, selected_file)
+        else:
+            pdf_files = sorted(
+                [
+                    os.path.join(upload_folder, f)
+                    for f in os.listdir(upload_folder)
+                    if f.lower().endswith(".pdf")
+                ],
+                key=os.path.getmtime,
+                reverse=True
+            )
+            pdf_path = pdf_files[0] if pdf_files else None
+
+        if not pdf_path or not os.path.exists(pdf_path):
+            return {
+                "prompt": "No PDF found. Please upload a CAD drawing PDF first.",
+                "sources": [],
+                "tool_used": "array_dimensions"
+            }
+
+        dims = extract_array_dimensions(pdf_path)
+        filename = os.path.basename(pdf_path)
+
+        lines = [f"## Array Dimensions — {filename}\n"]
+        lines.append("| Page | Width | Height |")
+        lines.append("|------|-------|--------|")
+
+        for pg, info in dims.items():
+            w = info["width"]  or "—"
+            h = info["height"] or "—"
+            lines.append(f"| {pg} | {w} | {h} |")
+
+        return {
+            "prompt": "\n".join(lines),
+            "sources": [],
+            "tool_used": "array_dimensions"
+        }
 
     json_mode = wants_json_output(
         query
     )   
 
     upload_folder = f"uploads/user_{user_id}"
+
+    os.makedirs(upload_folder, exist_ok=True)
 
     pdf_files = sorted(
         [

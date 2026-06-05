@@ -878,6 +878,8 @@ def ask_question(
 
         upload_folder = f"uploads/user_{user_id}"
 
+        os.makedirs(upload_folder, exist_ok=True)
+
         # Pick selected file or most recent PDF
         if selected_file and selected_file.lower().endswith(".pdf"):
             pdf_path = os.path.join(upload_folder, selected_file)
@@ -923,6 +925,8 @@ def ask_question(
     )   
 
     upload_folder = f"uploads/user_{user_id}"
+
+    os.makedirs(upload_folder, exist_ok=True)
 
     pdf_files = sorted(
         [

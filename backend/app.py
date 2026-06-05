@@ -7,7 +7,7 @@ from fastapi import (
     Body,
     Header
 )
-
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     StreamingResponse
 )
@@ -57,6 +57,17 @@ from auth import (
 # =====================================================
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 Base.metadata.create_all(
     bind=engine
@@ -344,19 +355,21 @@ def validate_token(
 
 @app.post("/upload")
 async def upload_document(
-    file: UploadFile = File(...),
-    token: str = Header(...)
+    file: UploadFile = File(...)
 ):
 
     db = SessionLocal()
 
-    email = decode_access_token(
-        token
-    )
+    # Temporary development user
+    user = db.query(User).first()
 
-    user = db.query(User).filter(
-        User.email == email
-    ).first()
+    if not user:
+
+        db.close()
+
+        return {
+            "message": "No users found. Please create one account first."
+        }
 
     # -------------------------------------------------
     # USER UPLOAD FOLDER
@@ -513,19 +526,19 @@ def get_uploaded_files(
 
 @app.post("/ask")
 async def ask(
-    data: dict = Body(...),
-    token: str = Header(...)
+    data: dict = Body(...)
 ):
 
     db = SessionLocal()
 
-    email = decode_access_token(
-        token
-    )
+    # Development mode
+    user = db.query(User).first()
 
-    user = db.query(User).filter(
-        User.email == email
-    ).first()
+    if not user:
+        db.close()
+        return {
+            "message": "No user found"
+        }
 
     query = data.get("query")
     selected_file = data.get(
@@ -588,6 +601,20 @@ async def ask(
     )
 
     prompt = response["prompt"]
+
+    if response.get(
+        "tool_used"
+    ) == "cad_review":
+
+        return StreamingResponse(
+            iter([prompt]),
+            media_type="text/plain",
+            headers={
+                "conversation_id": str(
+                    conversation_id
+                )
+            }
+        )
 
     sources = response.get(
         "sources",
@@ -846,41 +873,37 @@ def get_messages(
     return result
 
 @app.get("/documents")
-def get_documents(
-    token: str = Header(...)
-):
+async def get_documents():
 
     db = SessionLocal()
 
-    email = decode_access_token(
-        token
+    user = db.query(User).first()
+
+    if not user:
+        db.close()
+        return {
+            "documents": []
+        }
+
+    upload_folder = os.path.join(
+        "uploads",
+        f"user_{user.id}"
     )
 
-    user = db.query(User).filter(
-        User.email == email
-    ).first()
+    if not os.path.exists(upload_folder):
+        db.close()
+        return {
+            "documents": []
+        }
 
-    files = db.query(
-        UploadedFile
-    ).filter(
-        UploadedFile.user_id == user.id
-    ).all()
+    files = []
+
+    for f in os.listdir(upload_folder):
+        if os.path.isfile(
+            os.path.join(upload_folder, f)
+        ):
+            files.append(f)
 
     db.close()
 
-    result = []
-
-    for file in files:
-
-        extension = os.path.splitext(
-            file.filename
-        )[1].lower()
-
-        result.append(
-            {
-                "filename": file.filename,
-                "file_type": extension
-            }
-        )
-
-    return result
+    return [{"filename": f} for f in files]

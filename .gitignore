@@ -1,6 +1,7 @@
 venv/
 __pycache__/
 *.pyc
+*.pyo
 
 .env
 
@@ -14,3 +15,31 @@ rag_app.db
 .streamlit/
 
 .DS_Store
+
+# Temp OCR debug images
+backend/temp_page_*.png
+backend/temp_page_*_debug.png
+backend/temp_page_*_drawing.png
+backend/temp_page_*_keyplan.png
+backend/temp_page_*_title.png
+backend/temp_page_*_title_verify.png
+
+# Auth tokens
+frontend/token.txt
+frontend/session.json
+
+# React build artifacts
+client/node_modules/
+client/dist/
+client/.vite/
+
+# Misc docs from previous phase
+BEFORE_AFTER_COMPARISON.md
+CHECKLIST.md
+CODE_CHANGES.md
+IMPLEMENTATION_GUIDE.md
+IMPLEMENTATION_SUMMARY.md
+QUICK_START.md
+ROUTER_ARCHITECTURE.md
+START_HERE.md
+🎯_IMPLEMENTATION_COMPLETE.txt

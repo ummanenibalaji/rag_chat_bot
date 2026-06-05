@@ -1,5 +1,6 @@
 import os
 import re
+import json
 
 from document_loader import (
     load_document
@@ -9,9 +10,6 @@ from langchain_community.vectorstores import (
     FAISS
 )
 
-from langchain_huggingface import (
-    HuggingFaceEmbeddings
-)
 
 from langchain_ollama import (
     ChatOllama
@@ -34,9 +32,228 @@ from rag_pipeline import (
 from tools import (
     calculator_tool,
     web_search_tool,
-    vision_tool
+    vision_tool,
+    cad_review_tool
 )
 
+
+# =====================================================
+# CAD MARKER SAFETY LAYER
+# =====================================================
+
+def check_cad_markers(
+    pdf_path
+):
+    """
+    Verify CAD document before running expensive OCR.
+    
+    Looks for engineering-specific markers in the preview.
+    """
+    
+    try:
+        loader = PyPDFLoader(
+            pdf_path
+        )
+        
+        docs = loader.load()
+        
+        preview = ""
+        
+        for page in docs[:2]:
+            preview += (
+                page.page_content[:2000].lower()
+                + "\n\n"
+            )
+        
+        # CAD-specific markers
+        cad_markers = [
+            "roof area",
+            "array layout",
+            "key plan",
+            "engineer's stamp",
+            "sheet sm.",
+            "title block",
+            "drawing number",
+            "revision",
+            "scale",
+            "grid reference",
+            "electrical diagram",
+            "wiring diagram",
+            "schematic",
+            "blueprint",
+            "cad",
+            "autocad",
+            "revit",
+            "drawing",
+            "design",
+            "engineering drawing",
+            "technical drawing"
+        ]
+        
+        score = sum(
+            marker in preview
+            for marker in cad_markers
+        )
+        
+        return score >= 3
+        
+    except Exception as e:
+        print(
+            f"Error checking CAD markers: {e}"
+        )
+        return False
+
+
+# =====================================================
+# ENHANCED LLM ROUTER (JSON OUTPUT)
+# =====================================================
+
+def llm_route(
+    query,
+    pdf_path
+):
+    """
+    Route user intent to appropriate tool.
+    
+    Returns JSON with tool, confidence, and reason.
+    """
+
+    try:
+        loader = PyPDFLoader(
+            pdf_path
+        )
+
+        docs = loader.load()
+
+        preview = ""
+
+        for page in docs[:2]:
+
+            preview += (
+                page.page_content[:1500]
+                + "\n\n"
+            )
+
+    except Exception as e:
+        print(
+            f"Error loading PDF: {e}"
+        )
+        return {
+            "tool": "rag_search",
+            "confidence": 0.5,
+            "reason": "Could not preview document, using general RAG"
+        }
+
+    prompt = f"""
+You are an AI Router for document processing.
+
+Your job is to decide which tool should 
+answer the user's request based on:
+
+1. The user's explicit intent (what they want to do)
+2. The document preview (what type of content)
+
+Tools available:
+
+cad_review - ONLY use when:
+  AND user explicitly asks for: review, validate, check, 
+      QA, error checking, mismatch detection
+  AND document contains CAD/engineering content: 
+      drawing, schematic, blueprint, array layout, roof area, etc.
+
+rag_search - use for EVERYTHING ELSE:
+  - summarize, explain, answer questions
+  - resume, invoice, legal, academic content
+  - general document analysis
+  - even if document mentions CAD but user isn't asking for QA
+
+---
+
+User Query:
+{query}
+
+Document Preview:
+{preview}
+
+---
+
+Return ONLY valid JSON (no markdown, no code fence):
+
+{{
+    "tool": "cad_review" or "rag_search",
+    "confidence": 0.0 to 1.0,
+    "reason": "brief explanation"
+}}
+"""
+
+    response = llm.invoke(
+        prompt
+    )
+
+    response_text = (
+        response.content
+        .strip()
+    )
+    
+    # Handle markdown code fences
+    if "```json" in response_text:
+        response_text = response_text.split(
+            "```json"
+        )[1].split("```")[0].strip()
+    elif "```" in response_text:
+        response_text = response_text.split(
+            "```"
+        )[1].split("```")[0].strip()
+    
+    try:
+        decision = json.loads(
+            response_text
+        )
+    except json.JSONDecodeError:
+        # Fallback if JSON parsing fails
+        print(
+            f"JSON parse error: {response_text}"
+        )
+        decision = {
+            "tool": "rag_search",
+            "confidence": 0.5,
+            "reason": "Could not parse router response"
+        }
+    
+    # ----- SAFETY LAYER -----
+    # Even if router says cad_review,
+    # verify it's actually a CAD document
+    if decision.get("tool") == "cad_review":
+        
+        is_cad = check_cad_markers(
+            pdf_path
+        )
+        
+        if not is_cad:
+            print(
+                "SAFETY CHECK FAILED: "
+                "Document doesn't contain CAD markers"
+            )
+            decision["tool"] = "rag_search"
+            decision["confidence"] = (
+                decision.get("confidence", 0.7) * 0.6
+            )
+            decision["reason"] = (
+                "Document lacks CAD markers. "
+                "Using general RAG instead."
+            )
+    
+    print(
+        "LLM ROUTER DECISION:"
+    )
+    print(
+        json.dumps(
+            decision,
+            indent=2
+        )
+    )
+
+    return decision
 
 # =====================================================
 # LLM
@@ -55,12 +272,7 @@ def load_user_vector_store(
     user_id
 ):
 
-    embeddings = HuggingFaceEmbeddings(
-        model_name=(
-            "sentence-transformers/"
-            "all-MiniLM-L6-v2"
-        )
-    )
+    from rag_pipeline import embeddings
 
     vector_path = (
         f"faiss_indexes/user_{user_id}"
@@ -160,7 +372,6 @@ def load_all_chunks(
         )
     return chunks
 
-
 # =====================================================
 # DETECT TOOL
 # =====================================================
@@ -168,6 +379,35 @@ def load_all_chunks(
 def detect_tool(
     query
 ):
+
+    query_lower = query.lower()
+
+    # -------------------------------------------------
+    # CAD REVIEW
+    # -------------------------------------------------
+
+    cad_keywords = [
+        "cad",
+        "drawing",
+        "blueprint",
+        "site plan",
+        "roof plan",
+        "drawing review",
+        "drawing qa",
+        "review drawing",
+        "check drawing",
+        "analyze cad",
+        "find errors",
+        "drawing errors",
+        "title block",
+        "key plan",
+        "sheet mismatch",
+        "array mismatch"
+    ]
+
+    # -------------------------------------------------
+    # CALCULATOR
+    # -------------------------------------------------
 
     math_keywords = [
         "+",
@@ -180,6 +420,10 @@ def detect_tool(
         "square root"
     ]
 
+    # -------------------------------------------------
+    # WEB SEARCH
+    # -------------------------------------------------
+
     web_keywords = [
         "today",
         "latest",
@@ -190,6 +434,10 @@ def detect_tool(
         "internet",
         "online"
     ]
+
+    # -------------------------------------------------
+    # VISION
+    # -------------------------------------------------
 
     vision_keywords = [
 
@@ -240,6 +488,16 @@ def detect_tool(
         "extract text"
     ]
 
+    # -------------------------------------------------
+    # CAD REVIEW DETECTION
+    # -------------------------------------------------
+
+    for keyword in cad_keywords:
+
+        if keyword in query_lower:
+
+            return "cad_review"
+
     file_keywords = [
         "list documents",
         "list files",
@@ -249,11 +507,9 @@ def detect_tool(
         "show documents",
         "what files are uploaded"
     ]
-    
-    query_lower = query.lower()
 
     # -------------------------------------------------
-    # CALCULATOR
+    # CALCULATOR DETECTION
     # -------------------------------------------------
 
     for keyword in math_keywords:
@@ -263,7 +519,7 @@ def detect_tool(
             return "calculator"
 
     # -------------------------------------------------
-    # WEB SEARCH
+    # WEB SEARCH DETECTION
     # -------------------------------------------------
 
     for keyword in web_keywords:
@@ -273,7 +529,7 @@ def detect_tool(
             return "web_search"
 
     # -------------------------------------------------
-    # VISION TOOL
+    # VISION DETECTION
     # -------------------------------------------------
 
     for keyword in vision_keywords:
@@ -289,6 +545,12 @@ def detect_tool(
             return "file_list"
 
     return None
+
+
+# =====================================================
+# DOCUMENT CLASSIFIER
+# =====================================================
+
 
 # =====================================================
 # JSON OUTPUT DETECTION
@@ -529,6 +791,11 @@ def ask_question(
         query
     )
 
+    print(
+        "DETECTED TOOL:",
+        tool
+    )
+
     if tool == "file_list":
 
         upload_folder = (
@@ -561,10 +828,187 @@ def ask_question(
             "tool_used": "file_list"
         }
 
+
     json_mode = wants_json_output(
         query
+    )   
+
+    upload_folder = f"uploads/user_{user_id}"
+
+    pdf_files = sorted(
+        [
+            os.path.join(upload_folder, f)
+            for f in os.listdir(upload_folder)
+            if f.lower().endswith(".pdf")
+        ],
+        key=os.path.getmtime,
+        reverse=True
     )
 
+    if len(pdf_files) > 0:
+
+        if selected_file:
+
+            current_pdf = os.path.join(
+                upload_folder,
+                selected_file
+            )
+
+        else:
+
+            current_pdf = pdf_files[0]
+
+        print(
+            "CLASSIFYING FILE:",
+            current_pdf
+        )
+
+        print(
+            "SELECTED FILE:",
+            selected_file
+        )
+
+        if (
+            tool is None
+            and len(pdf_files) > 0
+        ):
+
+            if selected_file:
+
+                current_pdf = os.path.join(
+                    upload_folder,
+                    selected_file
+                )
+
+            else:
+
+                current_pdf = pdf_files[0]
+
+            print(
+                "ROUTING FILE:",
+                current_pdf
+            )
+
+            tool = llm_route(
+                query,
+                current_pdf
+            )
+
+            # Extract tool from router decision
+            if isinstance(tool, dict):
+                tool = tool.get("tool")
+
+            if tool == "rag_search":
+
+                tool = None
+                print(
+                    "CAD REVIEW AUTO SELECTED"
+                )
+
+                print(
+                    "CAD REVIEW SELECTED"
+                )
+
+    # -------------------------------------------------
+    # CAD REVIEW TOOL
+    # -------------------------------------------------
+    if tool == "cad_review":
+
+        print(
+            "CAD REVIEW TOOL EXECUTING"
+        )
+
+        upload_folder = (
+            f"uploads/user_{user_id}"
+        )
+
+        if not os.path.exists(
+            upload_folder
+        ):
+
+            return {
+                "prompt":
+                    "No uploaded files found.",
+                "sources": []
+            }
+
+        pdf_files = sorted(
+            [
+                os.path.join(
+                    upload_folder,
+                    f
+                )
+                for f in os.listdir(
+                    upload_folder
+                )
+                if f.lower().endswith(
+                    ".pdf"
+                )
+            ],
+            key=os.path.getmtime,
+            reverse=True
+        )
+
+        if len(pdf_files) == 0:
+
+            return {
+                "prompt":
+                    "No PDF drawings found.",
+                "sources": []
+            }
+
+        if selected_file:
+            pdf_path = os.path.join(
+                upload_folder,
+                selected_file
+            )
+        else:
+            pdf_path = pdf_files[0]
+
+        report = cad_review_tool(
+            pdf_path
+        )
+
+        formatted_report = (
+            "🔍 CAD REVIEW REPORT\n\n"
+        )
+
+        for page in report:
+
+            formatted_report += (
+                f"Page {page['page']}\n"
+            )
+
+            formatted_report += (
+                f"Status: {page['status']}\n"
+            )
+
+            if page["errors"]:
+
+                formatted_report += (
+                    "Errors:\n"
+                )
+
+                for error in page[
+                    "errors"
+                ]:
+
+                    formatted_report += (
+                        f"• {error}\n"
+                    )
+
+            formatted_report += "\n"
+
+        return {
+            "prompt": formatted_report,
+            "sources": [
+                os.path.basename(
+                    pdf_path
+                )
+            ],
+            "tool_used":
+                "cad_review"
+        }
     # -------------------------------------------------
     # CALCULATOR TOOL
     # -------------------------------------------------
@@ -815,7 +1259,7 @@ Answer:
     docs = rerank_documents(
         rewritten_query,
         docs,
-        top_k=4
+        top_k=5
     )
 
     # -------------------------------------------------
@@ -973,4 +1417,4 @@ Answer:
         "detected_file": detected_file,
         "detected_files": detected_files,
         "comparison_mode": comparison_mode
-    }
+    }   

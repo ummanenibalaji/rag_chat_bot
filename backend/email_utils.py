@@ -1,17 +1,17 @@
+import os
 import smtplib
-
 from email.mime.text import MIMEText
-
 from email.mime.multipart import MIMEMultipart
+from dotenv import load_dotenv
 
+load_dotenv()
 
 # =====================================================
 # EMAIL CONFIG
 # =====================================================
 
-EMAIL_ADDRESS = "ummanenibalajirockzz007@gmail.com"
-
-EMAIL_PASSWORD = "mvwl zuta okyj nxwo"
+EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS", "")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
 
 
 # =====================================================
@@ -24,7 +24,7 @@ def send_reset_email(
 ):
 
     reset_link = (
-        f"http://localhost:8501/?token={reset_token}"
+        f"http://localhost:3000/?token={reset_token}"
     )
 
     subject = "Password Reset Request"

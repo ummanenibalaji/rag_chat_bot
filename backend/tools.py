@@ -4,7 +4,9 @@ from duckduckgo_search import DDGS
 from vision_utils import (
     analyze_image
 )
-
+from cad_checker import (
+    validate_document
+)
 # =====================================================
 # CALCULATOR TOOL
 # =====================================================
@@ -114,3 +116,17 @@ def vision_tool(
         return (
             f"Vision Error: {str(e)}"
         )
+    
+# =====================================================
+# CAD REVIEW TOOL
+# =====================================================
+
+def cad_review_tool(
+    pdf_path
+):
+
+    report = validate_document(
+        pdf_path
+    )
+
+    return report

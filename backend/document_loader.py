@@ -92,6 +92,9 @@ def load_pdf(file_path):
         if ocr_docs:
             for doc in ocr_docs:
                 doc.metadata["is_engineering_drawing"] = is_drawing
+                # Always ensure source is set so filename filtering works
+                if not doc.metadata.get("source"):
+                    doc.metadata.update(build_metadata(file_path=file_path, file_type="pdf"))
             return ocr_docs
         # If OCR also fails, return whatever text was extracted
         print("OCR produced no output — using raw extracted text")

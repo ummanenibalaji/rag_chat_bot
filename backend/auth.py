@@ -1,6 +1,7 @@
 import os
 from datetime import datetime, timedelta
-from jose import JWTError, jwt
+from jose import JWTError, ExpiredSignatureError, jwt
+from fastapi import HTTPException, status
 import bcrypt
 from dotenv import load_dotenv
 
@@ -39,14 +40,25 @@ def create_access_token(data):
 
     return encoded_jwt
 def decode_access_token(token):
-
-    payload = jwt.decode(
-        token,
-        SECRET_KEY,
-        algorithms=[ALGORITHM]
-    )
-
-    return payload.get("sub")
+    try:
+        payload = jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM]
+        )
+        return payload.get("sub")
+    except ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 def create_reset_token(email):
 

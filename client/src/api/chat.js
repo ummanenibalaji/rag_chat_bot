@@ -10,6 +10,14 @@ export const getMessages = async (convId, token) => {
   return res.json()
 }
 
+export const deleteConversation = async (convId, token) => {
+  const res = await fetch(`${BASE}/conversations/${convId}`, {
+    method: 'DELETE',
+    headers: { token },
+  })
+  return res.json()
+}
+
 export const askStream = async ({ query, chatHistory, conversationId, selectedFile, token, onChunk, onDone, onConversationId }) => {
   const res = await fetch(`${BASE}/ask`, {
     method: 'POST',

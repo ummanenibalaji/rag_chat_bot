@@ -217,8 +217,9 @@ def hybrid_search(
 def rerank_documents(
     query: str,
     docs: list,
-    top_k: int = 5,
-    score_threshold: float = -5.0,
+    top_k: int = 6,
+    score_threshold: float = -10.0,
+    max_chunks_per_source: int = 4,
 ) -> list:
 
     if not docs:
@@ -229,14 +230,12 @@ def rerank_documents(
 
     scored = sorted(zip(docs, scores), key=lambda x: x[1], reverse=True)
 
-    # Threshold + source diversity (max 2 chunks per source)
     results, seen_sources = [], defaultdict(int)
     for doc, score in scored:
         if score < score_threshold:
             continue
         src = doc.metadata.get('source', 'unknown')
-        if seen_sources[src] < 2:
-            # Context expansion: replace child chunk with parent content if available
+        if seen_sources[src] < max_chunks_per_source:
             parent = doc.metadata.get('parent_content')
             if parent and len(parent) > len(doc.page_content):
                 expanded = Document(page_content=parent, metadata=doc.metadata)

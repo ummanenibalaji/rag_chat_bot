@@ -2,6 +2,7 @@ import { useAuth, AuthProvider } from './context/AuthContext'
 import LoginPage from './components/Auth/LoginPage'
 import AppLayout from './components/Layout/AppLayout'
 import Spinner from './components/UI/Spinner'
+import { CustomCursor, ClickBurstCanvas } from './components/UI/GlobalEffects'
 
 function AppInner() {
   const { isLoggedIn, loading } = useAuth()
@@ -28,6 +29,8 @@ function AppInner() {
 export default function App() {
   return (
     <AuthProvider>
+      <CustomCursor />
+      <ClickBurstCanvas />
       <AppInner />
     </AuthProvider>
   )

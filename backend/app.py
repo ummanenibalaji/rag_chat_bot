@@ -1,5 +1,12 @@
 import os
 
+# Load .env before any HuggingFace imports to prevent online version-check hangs
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from fastapi import (
     FastAPI,
     UploadFile,
@@ -13,6 +20,9 @@ from fastapi.responses import (
 )
 
 import chatbot
+
+from llm_providers import answer_llm, llm_status, list_ollama_models, swap_answer_model
+import llm_providers
 
 from email_utils import (
     send_reset_email
@@ -102,6 +112,45 @@ def home():
             "RAG Chatbot Backend Running"
         )
     }
+
+
+# =====================================================
+# LLM STATUS
+# =====================================================
+
+@app.get("/llm-status")
+def get_llm_status():
+    return llm_status()
+
+
+# =====================================================
+# LIST OLLAMA MODELS
+# =====================================================
+
+@app.get("/ollama-models")
+def get_ollama_models():
+    return {
+        "models": list_ollama_models(),
+        "current": llm_providers._state["answer_model"],
+    }
+
+
+# =====================================================
+# SWITCH ANSWER MODEL
+# =====================================================
+
+@app.post("/switch-model")
+def switch_model(data: dict = Body(...), token: str = Header(...)):
+    decode_access_token(token)  # auth check
+    model_name = data.get("model")
+    if not model_name:
+        return {"error": "model field required"}
+    result = swap_answer_model(model_name)
+    # refresh the module-level reference app.py uses
+    import llm_providers as _lp
+    global answer_llm
+    answer_llm = _lp.answer_llm
+    return result
 
 
 # =====================================================
@@ -605,19 +654,24 @@ async def ask(
     # ASK QUESTION
     # -------------------------------------------------
 
+    db_files = db.query(UploadedFile).filter(
+        UploadedFile.user_id == user.id
+    ).all()
+    tracked_files = [f.filename for f in db_files]
+
     response = ask_question(
         query=query,
         user_id=user.id,
         chat_history=chat_history,
-        selected_file=selected_file
+        selected_file=selected_file,
+        tracked_files=tracked_files
     )
 
     prompt = response["prompt"]
 
-    if response.get(
-        "tool_used"
-    ) == "cad_review":
-
+    if response.get("tool_used") in (
+        "cad_review", "array_dimensions", "file_list"
+    ):
         return StreamingResponse(
             iter([prompt]),
             media_type="text/plain",
@@ -635,7 +689,7 @@ async def ask(
 
     full_response = ""
 
-    stream = chatbot.llm.stream(
+    stream = llm_providers.answer_llm.stream(
         prompt
     )
 
@@ -883,6 +937,37 @@ def get_messages(
     db.close()
 
     return result
+
+# =====================================================
+# DELETE CONVERSATION
+# =====================================================
+
+@app.delete("/conversations/{conversation_id}")
+def delete_conversation(
+    conversation_id: int,
+    token: str = Header(...)
+):
+    db = SessionLocal()
+
+    email = decode_access_token(token)
+    user = db.query(User).filter(User.email == email).first()
+
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id,
+        Conversation.user_id == user.id
+    ).first()
+
+    if not conversation:
+        db.close()
+        return {"message": "Not found"}
+
+    db.query(Message).filter(Message.conversation_id == conversation_id).delete()
+    db.delete(conversation)
+    db.commit()
+    db.close()
+
+    return {"message": "Deleted"}
+
 
 @app.get("/documents")
 async def get_documents(
